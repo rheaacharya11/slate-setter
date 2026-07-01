@@ -27,18 +27,24 @@ function holdoverWeight(film: FilmRecord): number {
  * A big market where incumbents have locked up most of it is still worse than
  * a slightly smaller market with weak competition — this captures that.
  */
+// Target available share for an "average" weekend after normalization.
+// Maps the year's median competition to the Medium score range.
+const TARGET_AVG_AVAILABLE = 0.5;
+
 export function computeSlotScore({
   totalGross,
   yearAvgGross,
   films,
   marquee,
+  yearAvgAvailableShare,
 }: {
   totalGross: number;
   yearAvgGross: number;
   films: FilmRecord[];
   marquee: string | null;
-}): { score: number; breakdown: ScoreBreakdown } {
-  const empty = { score: 0, breakdown: { marketScore: 0, availabilityScore: 0, holidayBonus: 0 } };
+  yearAvgAvailableShare?: number;
+}): { score: number; breakdown: ScoreBreakdown; rawAvailableShare: number } {
+  const empty = { score: 0, breakdown: { marketScore: 0, availabilityScore: 0, holidayBonus: 0 }, rawAvailableShare: 1 };
   if (!totalGross || !yearAvgGross) return empty;
 
   // How big is this market relative to a normal weekend this year?
@@ -54,7 +60,15 @@ export function computeSlotScore({
     takenShare += rawShare * holdoverWeight(film);
   }
 
-  const availableShare = Math.max(0, 1 - Math.min(takenShare, 1));
+  const rawAvailableShare = Math.max(0, 1 - Math.min(takenShare, 1));
+
+  // Normalize relative to the year's average so weekends are scored against
+  // typical competition for that year, not an absolute scale. Without this,
+  // historical weekends (where all films are known) always read as Low because
+  // the entire market is already allocated to existing films.
+  const availableShare = (yearAvgAvailableShare && yearAvgAvailableShare > 0)
+    ? Math.min(rawAvailableShare / yearAvgAvailableShare * TARGET_AVG_AVAILABLE, 1)
+    : rawAvailableShare;
 
   // Opportunity = (available slice) × (how big the pie is)
   const opportunity = availableShare * Math.min(marketRatio, 2.5);
@@ -70,6 +84,7 @@ export function computeSlotScore({
       availabilityScore: Math.round(availableShare * 40),
       holidayBonus,
     },
+    rawAvailableShare,
   };
 }
 

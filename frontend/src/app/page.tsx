@@ -10,7 +10,6 @@ import { formatGross } from "@/lib/format";
 import { scoreGrade } from "@/lib/scoring";
 import type { Genre } from "@/lib/genres";
 import { ALL_GENRES } from "@/lib/genres";
-import Link from "next/link";
 
 interface Props {
   searchParams: Promise<{ year?: string; genre?: string; studios?: string }>;
@@ -43,18 +42,26 @@ export default async function HomePage({ searchParams }: Props) {
     : [];
   const historicalSummaries = isFuture ? [] : getWeekendSummaries(year, genre);
 
-  // Ranked recommendations
-  const topSlots = isFuture
-    ? [...futureSummaries]
-        .sort((a, b) => (b.genreScore ?? b.score) - (a.genreScore ?? a.score))
-        .slice(0, 5)
-    : genre
-      ? [...historicalSummaries]
-          .sort((a, b) => (b.genreScore ?? b.score) - (a.genreScore ?? a.score))
-          .slice(0, 5)
-      : [...historicalSummaries]
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 5);
+  function getSeason(dateStr: string): "Winter" | "Spring" | "Summer" | "Fall" {
+    const month = new Date(dateStr).getUTCMonth() + 1;
+    if (month <= 2 || month === 12) return "Winter";
+    if (month <= 5) return "Spring";
+    if (month <= 8) return "Summer";
+    return "Fall";
+  }
+
+  const SEASONS = ["Winter", "Spring", "Summer", "Fall"] as const;
+
+  const summaries = isFuture ? futureSummaries : historicalSummaries;
+  const bestBySeasonMap = new Map<string, typeof summaries[number]>();
+  for (const s of summaries) {
+    const season = getSeason(s.startDate);
+    const cur = bestBySeasonMap.get(season);
+    const score = genre ? (s.genreScore ?? s.score) : s.score;
+    const curScore = cur ? (genre ? (cur.genreScore ?? cur.score) : cur.score) : -1;
+    if (score > curScore) bestBySeasonMap.set(season, s);
+  }
+  const bestBySeason = SEASONS.map(season => ({ season, weekend: bestBySeasonMap.get(season) ?? null }));
 
   const totalMarket = historicalSummaries.reduce((s, w) => s + w.totalGross, 0);
 
@@ -87,6 +94,41 @@ export default async function HomePage({ searchParams }: Props) {
         )}
       </div>
 
+      {/* Suggested weekends strip */}
+      <div className="mb-8 border border-[#e5e5e5] bg-[#fafaf9] px-4 py-3">
+        <p className="text-[9px] tracking-[0.2em] uppercase text-[#9b9b9b] mb-2">
+          {isFuture
+            ? genre
+              ? `Top slots for a ${genre} film`
+              : `Highest-opportunity weekends in ${year}`
+            : genre
+              ? `Best slots for a ${genre} film`
+              : "Best slot scores"}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {topSlots.map((s, i) => {
+            const score = genre ? (s.genreScore ?? s.score) : s.score;
+            const { grade, color } = scoreGrade(score);
+            return (
+              <div
+                key={s.id}
+                className="flex items-center gap-1.5 border border-[#e5e5e5] bg-white px-2.5 py-1"
+              >
+                <span className="text-[9px] text-[#c0c0c0] tabular-nums">{i + 1}</span>
+                <span className="text-[11px] text-[#0a0a0a]">{s.dateRange}</span>
+                {s.marquee && (
+                  <span className="text-[9px] text-[#b8860b]">{s.marquee}</span>
+                )}
+                {genre && (s.genreThreatCount ?? 0) > 0 && (
+                  <span className="text-[9px] text-[#b8860b]">{s.genreThreatCount}⚠</span>
+                )}
+                <span className="text-[11px] font-bold tabular-nums" style={{ color }}>{grade} {score}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Main visualization */}
       <div className="mb-16">
         {isFuture
@@ -99,128 +141,6 @@ export default async function HomePage({ searchParams }: Props) {
             />
           : <CalendarHeatmap data={historicalSummaries} genreMode={!!genre} />
         }
-      </div>
-
-      {/* Recommendations footer */}
-      <div className="border-t border-[#e5e5e5] pt-10">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-
-          {/* Best slots */}
-          <div>
-            <p className="text-[10px] tracking-[0.25em] uppercase text-[#6b6b6b] mb-6">
-              {isFuture
-                ? genre
-                  ? `Recommended slots for a ${genre} film`
-                  : `Highest-opportunity weekends in ${year}`
-                : genre
-                  ? `Best slots for a ${genre} film`
-                  : "Best slot scores"}
-            </p>
-            <div>
-              {topSlots.map((s, i) => {
-                const score = genre
-                  ? (s.genreScore ?? s.score)
-                  : s.score;
-                const { grade, color } = scoreGrade(score);
-                const href = isFuture
-                  ? `/compare?mode=upcoming&w1=${s.id}`
-                  : `/weekend/${s.id}`;
-                return (
-                  <Link
-                    key={s.id}
-                    href={href}
-                    className="flex items-baseline gap-4 py-3 border-b border-[#f0f0f0] hover:bg-[#fafaf9] -mx-2 px-2 transition-colors"
-                  >
-                    <span className="text-xs text-[#c0c0c0] w-4 shrink-0 tabular-nums">{i + 1}</span>
-                    <span className="text-sm text-[#0a0a0a] flex-1 min-w-0 truncate">{s.dateRange}</span>
-                    {s.marquee && (
-                      <span className="text-[10px] tracking-wider text-[#b8860b] shrink-0">{s.marquee}</span>
-                    )}
-                    {genre && (s.genreThreatCount ?? 0) > 0 && (
-                      <span className="text-[10px] text-[#b8860b] shrink-0">{s.genreThreatCount}⚠</span>
-                    )}
-                    <span className="font-bold text-sm shrink-0" style={{ color }}>
-                      {grade} ({score})
-                    </span>
-                  </Link>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Genre competition or historical context */}
-          {isFuture && genre ? (
-            <div>
-              <p className="text-[10px] tracking-[0.25em] uppercase text-[#6b6b6b] mb-6">
-                Weeks with {genre} competition
-              </p>
-              <div>
-                {futureSummaries
-                  .filter(s => (s.genreThreatCount ?? 0) > 0)
-                  .sort((a, b) => (b.genreThreatCount ?? 0) - (a.genreThreatCount ?? 0))
-                  .slice(0, 6)
-                  .map(s => (
-                    <Link
-                      key={s.id}
-                      href={`/compare?mode=upcoming&w1=${s.id}`}
-                      className="flex items-baseline gap-4 py-3 border-b border-[#f0f0f0] hover:bg-[#fafaf9] -mx-2 px-2 transition-colors"
-                    >
-                      <span className="text-[10px] text-[#b8860b] shrink-0 w-4 tabular-nums">
-                        {s.genreThreatCount}⚠
-                      </span>
-                      <span className="text-sm text-[#0a0a0a] flex-1 min-w-0 truncate">{s.dateRange}</span>
-                      <span className="text-xs text-[#9b9b9b] shrink-0">{s.wideCount} wide</span>
-                    </Link>
-                  ))}
-                {futureSummaries.every(s => !(s.genreThreatCount ?? 0)) && (
-                  <p className="text-sm text-emerald-600 py-4">No identified {genre} competition in {year}.</p>
-                )}
-              </div>
-            </div>
-          ) : isFuture ? (
-            <div>
-              <p className="text-[10px] tracking-[0.25em] uppercase text-[#6b6b6b] mb-6">
-                Holiday weekends in {year}
-              </p>
-              <div>
-                {futureSummaries.filter(s => s.marquee).map(s => {
-                  const { grade, color } = scoreGrade(s.score);
-                  return (
-                    <Link
-                      key={s.id}
-                      href={`/compare?mode=upcoming&w1=${s.id}`}
-                      className="flex items-baseline gap-4 py-3 border-b border-[#f0f0f0] hover:bg-[#fafaf9] -mx-2 px-2 transition-colors"
-                    >
-                      <span className="text-[10px] tracking-wider text-[#b8860b] shrink-0 w-28 truncate">{s.marquee}</span>
-                      <span className="text-sm text-[#0a0a0a] flex-1 min-w-0 truncate">{s.dateRange}</span>
-                      <span className="font-bold text-sm shrink-0" style={{ color }}>{grade} ({s.score})</span>
-                    </Link>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <div>
-              <p className="text-[10px] tracking-[0.25em] uppercase text-[#6b6b6b] mb-6">
-                Holiday & marquee weekends
-              </p>
-              <div>
-                {historicalSummaries.filter(s => s.marquee).map(s => (
-                  <Link
-                    key={s.id}
-                    href={`/weekend/${s.id}`}
-                    className="flex items-baseline gap-4 py-3 border-b border-[#f0f0f0] hover:bg-[#fafaf9] -mx-2 px-2 transition-colors"
-                  >
-                    <span className="text-[10px] tracking-wider text-[#b8860b] shrink-0 w-28 truncate">{s.marquee}</span>
-                    <span className="text-sm text-[#0a0a0a] flex-1 min-w-0 truncate">{s.dateRange}</span>
-                    <span className="font-serif font-bold text-sm text-[#0a0a0a] shrink-0">{formatGross(s.totalGross)}</span>
-                  </Link>
-                ))}
-              </div>
-            </div>
-          )}
-
-        </div>
       </div>
     </div>
   );

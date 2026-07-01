@@ -141,10 +141,19 @@ export default function MovieTimelineView({ weekends, releases, genreMode, genre
     return g.length ? g.reduce((a, b) => a + b, 0) / g.length : 1;
   }, [sorted]);
 
+  // Per-year avg wideCount — mirrors the normalization applied server-side
+  const yearAvgWideCount = useMemo(
+    () => sorted.reduce((s, w) => s + w.wideCount, 0) / (sorted.length || 1),
+    [sorted]
+  );
+
   const approxBreakdown = useMemo(() => {
     if (!selWeekend) return null;
     const marketRatio = overallAvg > 0 ? selWeekend.historicalAvgGross / overallAvg : 0;
-    const takenShare = Math.min(1 - Math.pow(0.82, selWeekend.wideCount), 0.85);
+    const effectiveCount = yearAvgWideCount > 0
+      ? selWeekend.wideCount * (3 / yearAvgWideCount)
+      : selWeekend.wideCount;
+    const takenShare = Math.min(1 - Math.pow(0.82, effectiveCount), 0.85);
     const availableShare = 1 - takenShare;
     return {
       marketPct: Math.round(Math.min(marketRatio * 50, 60)),
@@ -153,7 +162,7 @@ export default function MovieTimelineView({ weekends, releases, genreMode, genre
       marketRatioStr: (Math.round(marketRatio * 100) / 100).toFixed(2),
       availPctRaw: Math.round(availableShare * 100),
     };
-  }, [selWeekend, overallAvg]);
+  }, [selWeekend, overallAvg, yearAvgWideCount]);
 
   const maxHistGross = useMemo(
     () => Math.max(...sorted.map(w => w.historicalAvgGross), 1),
@@ -447,23 +456,32 @@ export default function MovieTimelineView({ weekends, releases, genreMode, genre
                 <div className="mb-2.5">
                   <p className="text-[8px] uppercase tracking-wider text-[#c0c0c0] mb-1">Opening same week</p>
                   <div className="space-y-1">
-                    {openers.slice(0, 5).map(f => (
-                      <div key={f.film + f.releaseDate} className="flex items-center gap-1.5">
-                        <span style={{
-                          width: 5, height: 5, borderRadius: "50%", flexShrink: 0,
-                          backgroundColor: f.isWide ? "#0a0a0a" : "#c0c0c0",
-                          display: "inline-block",
-                        }} />
-                        <a
-                          href={`https://www.imdb.com/find/?q=${encodeURIComponent(f.film)}&s=tt&ttype=ft`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[11px] text-[#0a0a0a] truncate hover:underline"
-                        >
-                          {f.film}
-                        </a>
-                      </div>
-                    ))}
+                    {openers.slice(0, 5).map(f => {
+                      const isGenreMatch = genre != null && (f.genre ?? inferGenre(f.film)) === genre;
+                      return (
+                        <div key={f.film + f.releaseDate} className="flex items-center gap-1.5">
+                          <span style={{
+                            width: 5, height: 5, borderRadius: "50%", flexShrink: 0,
+                            backgroundColor: f.isWide ? "#0a0a0a" : "#c0c0c0",
+                            display: "inline-block",
+                          }} />
+                          {isGenreMatch && (
+                            <span className="text-[8px] px-1 shrink-0 leading-tight" style={{ backgroundColor: "#fef3c7", color: "#b45309" }}>
+                              {genre}
+                            </span>
+                          )}
+                          <a
+                            href={`https://www.imdb.com/find/?q=${encodeURIComponent(f.film)}&s=tt&ttype=ft`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] truncate hover:underline"
+                            style={{ color: isGenreMatch ? "#0a0a0a" : "#0a0a0a", fontWeight: isGenreMatch ? 600 : 400 }}
+                          >
+                            {f.film}
+                          </a>
+                        </div>
+                      );
+                    })}
                     {openers.length > 5 && (
                       <p className="text-[10px] text-[#9b9b9b]">+{openers.length - 5} more</p>
                     )}
@@ -475,25 +493,33 @@ export default function MovieTimelineView({ weekends, releases, genreMode, genre
                 <div>
                   <p className="text-[8px] uppercase tracking-wider text-[#c0c0c0] mb-1">Holding over</p>
                   <div className="space-y-1">
-                    {holdovers.slice(0, 7).map(f => (
-                      <div key={f.film + f.releaseDate} className="flex items-center gap-1.5">
-                        <span className="text-[9px] tabular-nums shrink-0 px-1 leading-tight" style={{
-                          backgroundColor: f.weekInRun <= 2 ? "#f5f0e8" : "#f5f5f5",
-                          color: f.weekInRun <= 2 ? "#b8860b" : "#9b9b9b",
-                        }}>
-                          wk{f.weekInRun}
-                        </span>
-                        <a
-                          href={`https://www.imdb.com/find/?q=${encodeURIComponent(f.film)}&s=tt&ttype=ft`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[11px] truncate hover:underline"
-                          style={{ color: f.weekInRun <= 2 ? "#0a0a0a" : "#9b9b9b" }}
-                        >
-                          {f.film}
-                        </a>
-                      </div>
-                    ))}
+                    {holdovers.slice(0, 7).map(f => {
+                      const isGenreMatch = genre != null && (f.genre ?? inferGenre(f.film)) === genre;
+                      return (
+                        <div key={f.film + f.releaseDate} className="flex items-center gap-1.5">
+                          <span className="text-[9px] tabular-nums shrink-0 px-1 leading-tight" style={{
+                            backgroundColor: f.weekInRun <= 2 ? "#f5f0e8" : "#f5f5f5",
+                            color: f.weekInRun <= 2 ? "#b8860b" : "#9b9b9b",
+                          }}>
+                            wk{f.weekInRun}
+                          </span>
+                          {isGenreMatch && (
+                            <span className="text-[8px] px-1 shrink-0 leading-tight" style={{ backgroundColor: "#fef3c7", color: "#b45309" }}>
+                              {genre}
+                            </span>
+                          )}
+                          <a
+                            href={`https://www.imdb.com/find/?q=${encodeURIComponent(f.film)}&s=tt&ttype=ft`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] truncate hover:underline"
+                            style={{ color: f.weekInRun <= 2 ? "#0a0a0a" : "#9b9b9b", fontWeight: isGenreMatch ? 600 : 400 }}
+                          >
+                            {f.film}
+                          </a>
+                        </div>
+                      );
+                    })}
                     {holdovers.length > 7 && (
                       <p className="text-[10px] text-[#9b9b9b]">+{holdovers.length - 7} more</p>
                     )}

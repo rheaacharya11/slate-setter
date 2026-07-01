@@ -9,6 +9,7 @@
 export type Genre =
   | "Horror"
   | "Action"
+  | "Adventure"
   | "Animation"
   | "Comedy"
   | "Drama"
@@ -548,6 +549,7 @@ export function inferGenre(filmTitle: string): Genre | null {
 export const ALL_GENRES: Genre[] = [
   "Horror",
   "Action",
+  "Adventure",
   "Animation",
   "Comedy",
   "Drama",
@@ -557,3 +559,30 @@ export const ALL_GENRES: Genre[] = [
   "Documentary",
   "Musical",
 ];
+
+// Maps The Numbers genre strings to our Genre type.
+// "Thriller/Suspense" and "Thriller" both → "Thriller", etc.
+const NUMBERS_GENRE_MAP: Partial<Record<string, Genre>> = {
+  "Action": "Action",
+  "Adventure": "Adventure",
+  "Animation": "Animation",
+  "Black Comedy": "Comedy",
+  "Comedy": "Comedy",
+  "Concert/Performance": "Documentary",
+  "Documentary": "Documentary",
+  "Drama": "Drama",
+  "Horror": "Horror",
+  "Musical": "Musical",
+  "Reality": "Documentary",
+  "Romance": "Romance",
+  "Romantic Comedy": "Romance",
+  "Sci-Fi": "Sci-Fi",
+  "Thriller": "Thriller",
+  "Thriller/Suspense": "Thriller",
+  "Western": "Action",
+};
+
+export function normalizeNumbersGenre(genre: string | null | undefined): Genre | null {
+  if (!genre) return null;
+  return NUMBERS_GENRE_MAP[genre] ?? null;
+}

@@ -8,7 +8,7 @@ import type {
   ScheduledRelease, FutureWeekendSummary, FutureWeekendDetail, ReleaseWithWeek,
 } from "./types";
 import { formatDateRange, getWeekendStartDate } from "./format";
-import { inferGenre } from "./genres";
+import { inferGenre, normalizeNumbersGenre } from "./genres";
 import type { Genre } from "./genres";
 
 function cleanFilmTitle(raw: string): string {
@@ -59,6 +59,36 @@ function getYearAvgGross(year: number): number {
   if (byWeek.size === 0) return 1;
   const total = Array.from(byWeek.values()).reduce((s, g) => s + g, 0);
   return total / byWeek.size;
+}
+
+const yearAvgAvailableShareCache = new Map<number, number>();
+
+/**
+ * Average "raw available share" across all weekends in a year — used to normalize
+ * historical scores so competition is measured relative to that year, not absolute.
+ * Cached since it requires a full scan of the year's film records.
+ */
+function getYearAvgAvailableShare(year: number): number {
+  if (yearAvgAvailableShareCache.has(year)) return yearAvgAvailableShareCache.get(year)!;
+
+  const records = getAllRecords().filter((r) => r.year === year);
+  const byWeek = new Map<number, FilmRecord[]>();
+  for (const r of records) {
+    const list = byWeek.get(r.week_of_year) ?? [];
+    list.push(r);
+    byWeek.set(r.week_of_year, list);
+  }
+  if (byWeek.size === 0) return 0.5;
+
+  const yearAvgGross = getYearAvgGross(year);
+  const shares = Array.from(byWeek.values()).map(films => {
+    const totalGross = films.reduce((s, f) => s + (f.weekend_gross ?? 0), 0);
+    return computeSlotScore({ totalGross, yearAvgGross, films, marquee: null }).rawAvailableShare;
+  });
+
+  const avg = shares.reduce((a, b) => a + b, 0) / shares.length;
+  yearAvgAvailableShareCache.set(year, avg);
+  return avg;
 }
 
 export function getWeekendSummaries(year: number, genre?: Genre | null): WeekendSummary[] {
@@ -339,11 +369,23 @@ function getOverallHistoricalAvg(): number {
   return total / byWeekYear.size;
 }
 
-function scoreFutureWeekend(wideCount: number, historicalAvgGross: number, overallAvg: number, marquee: string | null): number {
+// Effective wideCount that maps to ~50% market availability — anchors per-year normalization.
+const NORMALIZED_WIDE_BASELINE = 3;
+
+function scoreFutureWeekend(
+  wideCount: number,
+  historicalAvgGross: number,
+  overallAvg: number,
+  marquee: string | null,
+  yearAvgWideCount?: number,
+): number {
   const marketRatio = overallAvg > 0 ? historicalAvgGross / overallAvg : 0;
-  // Each unique wide film takes a share of audience attention, but with diminishing impact —
-  // a 6th wide release doesn't crowd a slot as much as the 2nd one does.
-  const takenShare = Math.min(1 - Math.pow(0.82, wideCount), 0.85);
+  // Normalize wideCount relative to the year's average so a year with systematically
+  // more releases isn't uniformly Low compared to a lighter year.
+  const effectiveCount = (yearAvgWideCount && yearAvgWideCount > 0)
+    ? wideCount * (NORMALIZED_WIDE_BASELINE / yearAvgWideCount)
+    : wideCount;
+  const takenShare = Math.min(1 - Math.pow(0.82, effectiveCount), 0.85);
   const availableShare = 1 - takenShare;
   const opportunity = availableShare * Math.min(marketRatio, 2.5);
   const holidayBonus = marquee ? 10 : 0;
@@ -378,36 +420,51 @@ export function getFutureWeekends(opts: { majorStudiosOnly?: boolean } = {}): Fu
     });
   }
 
-  const summaries: FutureWeekendSummary[] = [];
+  // First pass: collect wideCount per weekend so we can normalize within each year.
+  type Intermediate = {
+    id: string; year: number; week: number; fridayDate: Date;
+    dateLabel: string; dateRange: string;
+    wideCount: number; historicalAvgGross: number; marquee: string | null;
+  };
+  const intermediates: Intermediate[] = [];
   for (const [id, { releases, fridayDate, year, week }] of byWeek) {
     const { label, range } = formatDateRange(year, week);
-
-    // When majorStudiosOnly, only count tracked-studio releases toward wideCount/score.
     const releaseSubset = opts.majorStudiosOnly
       ? releases.filter(r => isMajorStudio(r.distributor))
       : releases;
-
-    // Deduplicate IMAX/Wide formats of the same film (e.g. "Minions (Wide)" + "Minions (IMAX)" = 1 film)
     const uniqueWideFilms = new Set(
       releaseSubset.filter(r => r.isWide).map(r => r.film.replace(/\s*\([^)]*\)\s*/g, "").trim())
     );
     const wideCount = uniqueWideFilms.size;
     const marquee = getFutureMarquee(fridayDate);
     const { avg: historicalAvgGross } = getHistoricalAvgForWeek(week);
-    const score = scoreFutureWeekend(wideCount, historicalAvgGross, overallAvg, marquee);
-    summaries.push({
-      id,
-      year,
-      week,
-      dateLabel: label,
-      dateRange: range,
-      startDate: fridayDate.toISOString().slice(0, 10),
-      wideCount,
-      historicalAvgGross,
-      marquee,
-      score,
-    });
+    intermediates.push({ id, year, week, fridayDate, dateLabel: label, dateRange: range, wideCount, historicalAvgGross, marquee });
   }
+
+  // Compute per-year average wideCount for normalization.
+  const yearAvgWide = new Map<number, number>();
+  const byYear = new Map<number, Intermediate[]>();
+  for (const w of intermediates) {
+    if (!byYear.has(w.year)) byYear.set(w.year, []);
+    byYear.get(w.year)!.push(w);
+  }
+  for (const [yr, weeks] of byYear) {
+    yearAvgWide.set(yr, weeks.reduce((s, w) => s + w.wideCount, 0) / weeks.length);
+  }
+
+  // Second pass: score with year-normalized wideCount.
+  const summaries: FutureWeekendSummary[] = intermediates.map(w => ({
+    id: w.id,
+    year: w.year,
+    week: w.week,
+    dateLabel: w.dateLabel,
+    dateRange: w.dateRange,
+    startDate: w.fridayDate.toISOString().slice(0, 10),
+    wideCount: w.wideCount,
+    historicalAvgGross: w.historicalAvgGross,
+    marquee: w.marquee,
+    score: scoreFutureWeekend(w.wideCount, w.historicalAvgGross, overallAvg, w.marquee, yearAvgWide.get(w.year)),
+  }));
 
   return summaries.sort((a, b) => a.startDate.localeCompare(b.startDate));
 }
@@ -463,8 +520,7 @@ export function getFutureWeekendsByYear(year: number, genre?: Genre | null, opts
       const { year: ry, week: rw } = dateToWeekOfYear(r.release_date);
       if (ry !== wy || rw !== ww) return false;
       if (opts.majorStudiosOnly && !isMajorStudio(r.distributor)) return false;
-      // Prefer scraped genre; fall back to inferred lookup for films without API data
-      const filmGenre = r.genre ?? inferGenre(cleanFilmTitle(r.film));
+      const filmGenre = normalizeNumbersGenre(r.genre) ?? inferGenre(cleanFilmTitle(r.film));
       return filmGenre === genre;
     });
     const threatCount = threats.length;
