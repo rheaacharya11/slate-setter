@@ -28,8 +28,8 @@ function holdoverWeight(film: FilmRecord): number {
  * a slightly smaller market with weak competition — this captures that.
  */
 // Target available share for an "average" weekend after normalization.
-// Maps the year's median competition to the Medium score range.
-const TARGET_AVG_AVAILABLE = 0.5;
+// 0.70 puts the year median solidly in Medium and lets genuinely open weekends reach High.
+const TARGET_AVG_AVAILABLE = 0.70;
 
 export function computeSlotScore({
   totalGross,

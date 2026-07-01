@@ -94,6 +94,7 @@ function getYearAvgAvailableShare(year: number): number {
 export function getWeekendSummaries(year: number, genre?: Genre | null): WeekendSummary[] {
   const records = getAllRecords().filter((r) => r.year === year);
   const yearAvgGross = getYearAvgGross(year);
+  const yearAvgAvailableShare = getYearAvgAvailableShare(year);
 
   // Group by week_of_year
   const byWeek = new Map<number, FilmRecord[]>();
@@ -115,7 +116,7 @@ export function getWeekendSummaries(year: number, genre?: Genre | null): Weekend
     const marquee = films.find((f) => f.marquee_weekend)?.marquee_weekend ?? null;
     const { label, range } = formatDateRange(year, week);
 
-    const { score } = computeSlotScore({ totalGross, yearAvgGross, films, marquee });
+    const { score } = computeSlotScore({ totalGross, yearAvgGross, films, marquee, yearAvgAvailableShare });
 
     const summary: WeekendSummary = {
       id: `${year}W${String(week).padStart(2, "0")}`,
@@ -151,14 +152,15 @@ function makeSummaryForWeek(
   year: number,
   week: number,
   films: FilmRecord[],
-  yearAvgGross: number
+  yearAvgGross: number,
+  yearAvgAvailableShare: number,
 ): WeekendSummary | null {
   if (films.length === 0) return null;
   const totalGross = films.reduce((sum, f) => sum + (f.weekend_gross ?? 0), 0);
   const marquee = films.find((f) => f.marquee_weekend)?.marquee_weekend ?? null;
   const { label, range } = formatDateRange(year, week);
   const topFilm = [...films].sort((a, b) => (b.weekend_gross ?? 0) - (a.weekend_gross ?? 0))[0]?.film ?? "—";
-  const { score } = computeSlotScore({ totalGross, yearAvgGross, films, marquee });
+  const { score } = computeSlotScore({ totalGross, yearAvgGross, films, marquee, yearAvgAvailableShare });
   return {
     id: `${year}W${String(week).padStart(2, "0")}`,
     year,
@@ -182,6 +184,7 @@ export function getWeekendDetail(year: number, week: number): WeekendDetail | nu
   if (records.length === 0) return null;
 
   const yearAvgGross = getYearAvgGross(year);
+  const yearAvgAvailableShare = getYearAvgAvailableShare(year);
   const totalGross = records.reduce((sum, f) => sum + (f.weekend_gross ?? 0), 0);
   const marquee = records.find((f) => f.marquee_weekend)?.marquee_weekend ?? null;
   const { label, range } = formatDateRange(year, week);
@@ -195,6 +198,7 @@ export function getWeekendDetail(year: number, week: number): WeekendDetail | nu
     yearAvgGross,
     films: records,
     marquee,
+    yearAvgAvailableShare,
   });
 
   // Adjacent weekends
@@ -215,10 +219,10 @@ export function getWeekendDetail(year: number, week: number): WeekendDetail | nu
   const nextWeek = idx < allWeeks.length - 1 ? allWeeks[idx + 1] : null;
 
   const prevSummary = prevWeek != null
-    ? makeSummaryForWeek(year, prevWeek, byWeek.get(prevWeek) ?? [], yearAvgGross)
+    ? makeSummaryForWeek(year, prevWeek, byWeek.get(prevWeek) ?? [], yearAvgGross, yearAvgAvailableShare)
     : null;
   const nextSummary = nextWeek != null
-    ? makeSummaryForWeek(year, nextWeek, byWeek.get(nextWeek) ?? [], yearAvgGross)
+    ? makeSummaryForWeek(year, nextWeek, byWeek.get(nextWeek) ?? [], yearAvgGross, yearAvgAvailableShare)
     : null;
 
   return {
@@ -370,7 +374,33 @@ function getOverallHistoricalAvg(): number {
 }
 
 // Effective wideCount that maps to ~50% market availability — anchors per-year normalization.
-const NORMALIZED_WIDE_BASELINE = 3;
+const NORMALIZED_WIDE_BASELINE = 2;
+
+// Wide-release theater threshold for BOM data (no isWide flag on FilmRecord).
+const WIDE_THEATER_THRESHOLD = 2000;
+
+// Holdover weight by week-in-run: same decay as holdoverWeight() in scoring.ts.
+function futureHoldoverWeight(weekInRun: number): number {
+  if (weekInRun === 2) return 0.85;
+  if (weekInRun === 3) return 0.60;
+  return 0.35; // wk 4+, mostly spent
+}
+
+let _bomWideOpenersCache: Map<string, number> | null = null;
+
+// BOM-sourced wide-opener count per "year:week" key. Cached at module level.
+function getBomWideOpeners(): Map<string, number> {
+  if (_bomWideOpenersCache) return _bomWideOpenersCache;
+  const result = new Map<string, number>();
+  for (const r of getAllRecords()) {
+    if (!r.is_new_release) continue;
+    if ((r.theater_count ?? 0) < WIDE_THEATER_THRESHOLD) continue;
+    const key = `${r.year}:${r.week_of_year}`;
+    result.set(key, (result.get(key) ?? 0) + 1);
+  }
+  _bomWideOpenersCache = result;
+  return result;
+}
 
 function scoreFutureWeekend(
   wideCount: number,
@@ -378,14 +408,19 @@ function scoreFutureWeekend(
   overallAvg: number,
   marquee: string | null,
   yearAvgWideCount?: number,
+  holdoverEffective?: number,
 ): number {
   const marketRatio = overallAvg > 0 ? historicalAvgGross / overallAvg : 0;
-  // Normalize wideCount relative to the year's average so a year with systematically
-  // more releases isn't uniformly Low compared to a lighter year.
-  const effectiveCount = (yearAvgWideCount && yearAvgWideCount > 0)
-    ? wideCount * (NORMALIZED_WIDE_BASELINE / yearAvgWideCount)
+  // Normalize new openers relative to the year's average.
+  // Cap denominator at BASELINE so sparse years (avgWide < BASELINE) aren't over-penalized.
+  // Holdovers are NOT included here: historicalAvgGross already bakes in typical holdover
+  // competition — adding explicit holdover counts on top double-counts competition and
+  // pushes scores to near-zero for normal late-summer weeks.
+  const effectiveOpeners = (yearAvgWideCount && yearAvgWideCount > 0)
+    ? wideCount * (NORMALIZED_WIDE_BASELINE / Math.max(yearAvgWideCount, NORMALIZED_WIDE_BASELINE))
     : wideCount;
-  const takenShare = Math.min(1 - Math.pow(0.82, effectiveCount), 0.85);
+  void holdoverEffective; // retained in summary for display only
+  const takenShare = Math.min(1 - Math.pow(0.82, effectiveOpeners), 0.85);
   const availableShare = 1 - takenShare;
   const opportunity = availableShare * Math.min(marketRatio, 2.5);
   const holidayBonus = marquee ? 10 : 0;
@@ -452,19 +487,51 @@ export function getFutureWeekends(opts: { majorStudiosOnly?: boolean } = {}): Fu
     yearAvgWide.set(yr, weeks.reduce((s, w) => s + w.wideCount, 0) / weeks.length);
   }
 
-  // Second pass: score with year-normalized wideCount.
-  const summaries: FutureWeekendSummary[] = intermediates.map(w => ({
-    id: w.id,
-    year: w.year,
-    week: w.week,
-    dateLabel: w.dateLabel,
-    dateRange: w.dateRange,
-    startDate: w.fridayDate.toISOString().slice(0, 10),
-    wideCount: w.wideCount,
-    historicalAvgGross: w.historicalAvgGross,
-    marquee: w.marquee,
-    score: scoreFutureWeekend(w.wideCount, w.historicalAvgGross, overallAvg, w.marquee, yearAvgWide.get(w.year)),
-  }));
+  // Build lookup: weekId -> wide opener count for all future weekends (for holdover computation).
+  const futureWideByKey = new Map<string, number>(intermediates.map(w => [w.id, w.wideCount]));
+  const bomWideOpeners = getBomWideOpeners();
+
+  // Sum decay-weighted competition from films that opened in the prior 1–5 weeks.
+  function computeHoldoverEffective(year: number, week: number): number {
+    let total = 0;
+    for (let back = 1; back <= 5; back++) {
+      let pw = week - back;
+      let py = year;
+      if (pw <= 0) { pw += 52; py -= 1; }
+      const weekInRun = back + 1;
+      const weight = futureHoldoverWeight(weekInRun);
+      const futKey = `${py}W${String(pw).padStart(2, "0")}`;
+      const bomKey = `${py}:${pw}`;
+      // Use Numbers data for future prior weeks; BOM data for past weeks still in run.
+      const count = futureWideByKey.has(futKey)
+        ? (futureWideByKey.get(futKey) ?? 0)
+        : (bomWideOpeners.get(bomKey) ?? 0);
+      total += count * weight;
+    }
+    return total;
+  }
+
+  // Second pass: score with year-normalized openers + holdover effective.
+  const summaries: FutureWeekendSummary[] = intermediates.map(w => {
+    const holdoverEffective = computeHoldoverEffective(w.year, w.week);
+    return {
+      id: w.id,
+      year: w.year,
+      week: w.week,
+      dateLabel: w.dateLabel,
+      dateRange: w.dateRange,
+      startDate: w.fridayDate.toISOString().slice(0, 10),
+      wideCount: w.wideCount,
+      historicalAvgGross: w.historicalAvgGross,
+      marquee: w.marquee,
+      holdoverEffective,
+      score: scoreFutureWeekend(
+        w.wideCount, w.historicalAvgGross, overallAvg, w.marquee,
+        yearAvgWide.get(w.year),
+        holdoverEffective,
+      ),
+    };
+  });
 
   return summaries.sort((a, b) => a.startDate.localeCompare(b.startDate));
 }

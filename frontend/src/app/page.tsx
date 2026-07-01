@@ -42,26 +42,30 @@ export default async function HomePage({ searchParams }: Props) {
     : [];
   const historicalSummaries = isFuture ? [] : getWeekendSummaries(year, genre);
 
-  function getSeason(dateStr: string): "Winter" | "Spring" | "Summer" | "Fall" {
-    const month = new Date(dateStr).getUTCMonth() + 1;
-    if (month <= 2 || month === 12) return "Winter";
-    if (month <= 5) return "Spring";
-    if (month <= 8) return "Summer";
+  type Season = "Winter" | "Spring" | "Summer" | "Fall";
+  function weekToSeason(week: number): Season {
+    if (week <= 8 || week >= 48) return "Winter";
+    if (week <= 21) return "Spring";
+    if (week <= 35) return "Summer";
     return "Fall";
   }
 
-  const SEASONS = ["Winter", "Spring", "Summer", "Fall"] as const;
+  const SEASONS: Season[] = ["Winter", "Spring", "Summer", "Fall"];
 
-  const summaries = isFuture ? futureSummaries : historicalSummaries;
-  const bestBySeasonMap = new Map<string, typeof summaries[number]>();
+  type AnySummary = typeof futureSummaries[number] | typeof historicalSummaries[number];
+  const summaries: AnySummary[] = isFuture ? futureSummaries : historicalSummaries;
+  const topBySeasonMap = new Map<Season, AnySummary[]>();
+  for (const season of SEASONS) topBySeasonMap.set(season, []);
   for (const s of summaries) {
-    const season = getSeason(s.startDate);
-    const cur = bestBySeasonMap.get(season);
-    const score = genre ? (s.genreScore ?? s.score) : s.score;
-    const curScore = cur ? (genre ? (cur.genreScore ?? cur.score) : cur.score) : -1;
-    if (score > curScore) bestBySeasonMap.set(season, s);
+    const season = weekToSeason(s.week);
+    topBySeasonMap.get(season)!.push(s);
   }
-  const bestBySeason = SEASONS.map(season => ({ season, weekend: bestBySeasonMap.get(season) ?? null }));
+  const topBySeason = SEASONS.map(season => ({
+    season,
+    weekends: (topBySeasonMap.get(season) ?? [])
+      .sort((a, b) => (genre ? (b.genreScore ?? b.score) - (a.genreScore ?? a.score) : b.score - a.score))
+      .slice(0, 3),
+  }));
 
   const totalMarket = historicalSummaries.reduce((s, w) => s + w.totalGross, 0);
 
@@ -94,39 +98,32 @@ export default async function HomePage({ searchParams }: Props) {
         )}
       </div>
 
-      {/* Suggested weekends strip */}
-      <div className="mb-8 border border-[#e5e5e5] bg-[#fafaf9] px-4 py-3">
-        <p className="text-[9px] tracking-[0.2em] uppercase text-[#9b9b9b] mb-2">
-          {isFuture
-            ? genre
-              ? `Top slots for a ${genre} film`
-              : `Highest-opportunity weekends in ${year}`
-            : genre
-              ? `Best slots for a ${genre} film`
-              : "Best slot scores"}
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {topSlots.map((s, i) => {
-            const score = genre ? (s.genreScore ?? s.score) : s.score;
-            const { grade, color } = scoreGrade(score);
-            return (
-              <div
-                key={s.id}
-                className="flex items-center gap-1.5 border border-[#e5e5e5] bg-white px-2.5 py-1"
-              >
-                <span className="text-[9px] text-[#c0c0c0] tabular-nums">{i + 1}</span>
-                <span className="text-[11px] text-[#0a0a0a]">{s.dateRange}</span>
-                {s.marquee && (
-                  <span className="text-[9px] text-[#b8860b]">{s.marquee}</span>
-                )}
-                {genre && (s.genreThreatCount ?? 0) > 0 && (
-                  <span className="text-[9px] text-[#b8860b]">{s.genreThreatCount}⚠</span>
-                )}
-                <span className="text-[11px] font-bold tabular-nums" style={{ color }}>{grade} {score}</span>
-              </div>
-            );
-          })}
-        </div>
+      {/* Best weekends by season */}
+      <div className="mb-8 grid grid-cols-4 gap-px bg-[#e5e5e5] border border-[#e5e5e5]">
+        {topBySeason.map(({ season, weekends }) => (
+          <div key={season} className="bg-white px-3 py-2.5">
+            <p className="text-[9px] tracking-[0.2em] uppercase text-[#9b9b9b] mb-2">{season}</p>
+            <div className="space-y-1.5">
+              {weekends.map((s, i) => {
+                const score = genre ? (s.genreScore ?? s.score) : s.score;
+                const { grade, color } = scoreGrade(score);
+                return (
+                  <div key={s.id} className="flex items-baseline gap-1.5">
+                    <span className="text-[9px] text-[#d0d0d0] tabular-nums shrink-0">{i + 1}</span>
+                    <span className="text-[11px] text-[#0a0a0a] flex-1 min-w-0 truncate">{s.dateLabel}</span>
+                    {s.marquee && (
+                      <span className="text-[9px] text-[#b8860b] shrink-0 truncate max-w-[60px]">{s.marquee}</span>
+                    )}
+                    <span className="text-[11px] font-bold tabular-nums shrink-0" style={{ color }}>{grade} {score}</span>
+                  </div>
+                );
+              })}
+              {weekends.length === 0 && (
+                <p className="text-[10px] text-[#c0c0c0]">No data</p>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* Main visualization */}

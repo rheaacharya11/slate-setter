@@ -31,6 +31,7 @@ export interface FutureWeekendSummary {
   historicalAvgGross: number;
   marquee: string | null;
   score: number;
+  holdoverEffective: number; // decay-weighted holdover competition from prior weeks
   genreScore?: number;       // genre-adjusted score (only when genre context provided)
   genreThreatCount?: number;
 }

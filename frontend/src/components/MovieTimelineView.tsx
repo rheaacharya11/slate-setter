@@ -150,10 +150,12 @@ export default function MovieTimelineView({ weekends, releases, genreMode, genre
   const approxBreakdown = useMemo(() => {
     if (!selWeekend) return null;
     const marketRatio = overallAvg > 0 ? selWeekend.historicalAvgGross / overallAvg : 0;
-    const effectiveCount = yearAvgWideCount > 0
-      ? selWeekend.wideCount * (3 / yearAvgWideCount)
+    const BASELINE = 2;
+    const effectiveOpeners = yearAvgWideCount > 0
+      ? selWeekend.wideCount * (BASELINE / Math.max(yearAvgWideCount, BASELINE))
       : selWeekend.wideCount;
-    const takenShare = Math.min(1 - Math.pow(0.82, effectiveCount), 0.85);
+    const holdoverEffective = selWeekend.holdoverEffective ?? 0;
+    const takenShare = Math.min(1 - Math.pow(0.82, effectiveOpeners), 0.85);
     const availableShare = 1 - takenShare;
     return {
       marketPct: Math.round(Math.min(marketRatio * 50, 60)),
@@ -161,6 +163,7 @@ export default function MovieTimelineView({ weekends, releases, genreMode, genre
       holiday: selWeekend.marquee ? 10 : 0,
       marketRatioStr: (Math.round(marketRatio * 100) / 100).toFixed(2),
       availPctRaw: Math.round(availableShare * 100),
+      holdoverEffective,
     };
   }, [selWeekend, overallAvg, yearAvgWideCount]);
 
@@ -382,9 +385,9 @@ export default function MovieTimelineView({ weekends, releases, genreMode, genre
                 })}
               </svg>
               <div className="flex justify-between text-[8px] text-[#c0c0c0] mt-0.5">
-                <span>Low</span>
+                <span>{sorted[0]?.dateLabel}</span>
                 <span className="text-[#6b6b6b]">↑ {formatGross(selWeekend.historicalAvgGross)} this wk</span>
-                <span>High</span>
+                <span>{sorted[sorted.length - 1]?.dateLabel}</span>
               </div>
             </div>
 
@@ -410,7 +413,7 @@ export default function MovieTimelineView({ weekends, releases, genreMode, genre
                           <span className="tabular-nums font-medium shrink-0">{approxBreakdown.marketPct} pts</span>
                         </div>
                         <div className="flex justify-between gap-2">
-                          <span className="text-[#6b6b6b]">{approxBreakdown.availPctRaw}% avail. ({selWeekend.wideCount} wide)</span>
+                          <span className="text-[#6b6b6b]">{approxBreakdown.availPctRaw}% avail. ({selWeekend.wideCount} wide + {approxBreakdown.holdoverEffective.toFixed(1)} holdover)</span>
                           <span className="tabular-nums font-medium shrink-0">{approxBreakdown.availPct} pts</span>
                         </div>
                         {approxBreakdown.holiday > 0 && (
