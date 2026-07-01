@@ -1,0 +1,14 @@
+# Python virtual envs
+a24/
+backend/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+
+# Misc
+.DS_Store
+__pycache__/
+*.pyc
+.env
+.env.local
